@@ -1,0 +1,239 @@
+
+
+//Code dò line PID cho robot
+//Khai báo thư viện
+#include <Arduino.h>
+#include <BluetoothSerial.h>
+#include <ESP32Servo.h>
+
+// Bluetooth
+BluetoothSerial SerialBT;
+
+// === Khai báo motor dùng PWM & chiều ===
+#define DIR_1_pin 17
+#define PWM_1_pin 15
+
+#define DIR_2_pin 18
+#define PWM_2_pin 0
+
+
+
+#define PWM_FREQ 1000
+#define PWM_RES 8
+
+
+// === Cấu hình cảm biến dò line ===
+
+int threshold = 2000; // Giá trị cần đo thực tế để xác định ngưỡng
+// === Biến PID ===
+float Kp = 25.0;   // Hệ số P (tăng nếu robot lệch nhiều)
+float Ki = 0.01;   // Hệ số I (khử sai số lâu dài)
+float Kd = 15.0;   // Hệ số D (giảm dao động)
+int prevError = 0;
+float integral = 0;
+int baseSpeed = 150; // Tốc độ cơ sở
+// === Khai báo cảm biến dò line ===
+#define SENSOR_1 27
+#define SENSOR_2 26
+#define SENSOR_3 25
+#define SENSOR_4 33
+#define SENSOR_5 32
+const int sensorPins[] = {27, 26, 25, 33, 32}; // S1-S5
+int sensorValues[5];
+ int sensor_1, sensor_2, sensor_3, sensor_4, sensor_5;
+int vitri;
+bool lineFollowing = false;
+
+// === Servo ===
+#define SERVO1_PIN 5
+#define SERVO2_PIN 13
+#define SERVO3_PIN 12
+#define SERVO4_PIN 14 
+Servo servo1, servo2, servo3,servo4;
+bool servo1State = false, servo2State = false, servo3State = false,servo4State = false;
+
+///////////////////////////////* các hàm con điều khiển cầm tay*/////////////////////////////////////////////////////////
+void tien() {
+  digitalWrite(DIR_1_pin, HIGH); analogWrite(PWM_1_pin, 250);// Trái trước
+  digitalWrite(DIR_2_pin, LOW);  analogWrite(PWM_2_pin, 250);// Phải trước
+  
+}
+
+
+void lui() {//lùi 
+  digitalWrite(DIR_1_pin, LOW);  analogWrite(PWM_1_pin, 250);
+  digitalWrite(DIR_2_pin, HIGH); analogWrite(PWM_2_pin, 250);
+ 
+}
+
+void retrai() {
+  digitalWrite(DIR_1_pin, LOW);  analogWrite(PWM_1_pin, 250);
+  digitalWrite(DIR_2_pin, LOW);  analogWrite(PWM_2_pin, 250);
+}
+
+void rephai() {
+  digitalWrite(DIR_1_pin, HIGH); analogWrite(PWM_1_pin, 250);  
+  digitalWrite(DIR_2_pin, HIGH); analogWrite(PWM_2_pin, 250);  
+}
+
+void dung() {//dừng 
+  analogWrite(PWM_1_pin, 0);
+  analogWrite(PWM_2_pin, 0);
+ 
+}
+
+
+void do_line() {
+  // Đọc cảm biến
+  for (int i = 0; i < 5; i++) {
+    sensorValues[i] = analogRead(sensorPins[i]);
+  }
+
+  // Tính toán vị trí line (Weighted Average)
+  int sum = 0, position = 0;
+  int weights[] = {-2, -1, 0, 1, 2}; // Trọng số từ trái sang phải
+
+  for (int i = 0; i < 5; i++) {
+    int active = (sensorValues[i] < threshold) ? 1 : 0;
+    position += weights[i] * active;
+    sum += active;
+  }
+
+  // Xử lý mất line
+  if (sum == 0) {
+    dung();
+    return;
+  }
+
+  int error = position / sum;
+
+  // Tính toán PID
+  integral += error;
+  float derivative = error - prevError;
+  float output = Kp*error + Ki*integral + Kd*derivative;
+  prevError = error;
+
+  // Điều khiển động cơ
+  int leftSpeed = baseSpeed + output;
+  int rightSpeed = baseSpeed - output;
+
+  leftSpeed = constrain(leftSpeed, 0, 255);
+  rightSpeed = constrain(rightSpeed, 0, 255);
+
+  // Điều khiển động cơ
+  digitalWrite(DIR_1_pin, HIGH);
+  analogWrite(PWM_1_pin, leftSpeed);
+  
+  digitalWrite(DIR_2_pin, LOW);
+  analogWrite(PWM_2_pin, rightSpeed);
+}
+
+
+// === Servo điều khiển ===
+void toggleServo1() {
+  if (!servo1State) {
+    servo1.write(180);  // Lần đầu
+  } else {
+    servo1.write(0);   // Góc cũ 
+  }
+  servo1State = !servo1State;
+}
+
+void toggleServo2() { 
+  if (!servo2State) {
+    servo2.write(60);  // Góc tùy ý lần đầu
+  } else {
+    servo2.write(0);    // Góc cũ
+}
+  servo2State = !servo2State;
+}
+
+void toggleServo3() { 
+  if (!servo3State) {
+    servo3.write(180);   // Góc tùy ý lần đầu
+  } else {
+    servo3.write(0);    // Góc cũ
+  }
+  servo3State = !servo3State;
+}   
+ 
+void toggleServo4() {
+  if (!servo4State) {
+    servo4.write(180);  // Lần đầu
+  } else {
+    servo4.write(0);   // Góc cũ 
+  }
+  servo4State = !servo4State;
+}
+// === Điều khiển ===
+void controlCar(char cmd) {
+  if (lineFollowing && cmd != 'X') return;
+
+  switch (cmd) {
+    //di chuyển
+    case 'F': tien(); break;
+    case 'G': lui(); break;
+    case 'L': retrai(); break;
+    case 'R': rephai(); break;
+    case 'S': dung(); break;
+    //điều khiển servo
+    case 'M': toggleServo1(); break;
+    case 'N': toggleServo2(); break;
+    case 'P': toggleServo3(); break;
+    case 'V': toggleServo4(); break;
+    //BẬT TẮT DOFL LINE 
+    case 'X':
+      lineFollowing = !lineFollowing;
+      if (!lineFollowing) {
+        dung();
+        Serial.println("Tắt dò line");
+      } else {
+        Serial.println("Bật dò line");
+      }
+      break;
+  }
+}
+
+// === Setup ===
+void setup() {
+  Serial.begin(115200);
+  SerialBT.begin("TN1_BANANANA");
+
+  // Set motor pins
+    pinMode(DIR_1_pin, OUTPUT);
+    pinMode(PWM_1_pin, OUTPUT);
+    pinMode(DIR_2_pin, OUTPUT);
+    pinMode(PWM_2_pin, OUTPUT);
+
+  // Line sensor
+  pinMode(SENSOR_1, INPUT); 
+  pinMode(SENSOR_2, INPUT);
+  pinMode(SENSOR_3, INPUT);
+  pinMode(SENSOR_4, INPUT);
+  pinMode(SENSOR_5, INPUT);
+
+  // Servo
+  servo1.attach(SERVO1_PIN);
+  servo2.attach(SERVO2_PIN);
+  servo3.attach(SERVO3_PIN);
+  servo4.attach(SERVO4_PIN);
+  servo1.write(0); 
+  servo2.write(0); 
+  servo3.write(0);
+  servo4.write(0);
+}
+
+// === Loop ===
+void loop() {
+  if (SerialBT.available()) {
+    char command = SerialBT.read();
+    Serial.println(command);
+    controlCar(command);
+  }
+
+  if (lineFollowing) {
+    do_line();
+  }
+
+  delay(100);
+}
